@@ -1,0 +1,17 @@
+# Python & Environment
+__pycache__/
+*.py[cod]
+*$py.class
+scraper_agent/
+
+# Logs and Temporary Folders
+html_logs/
+state/
+downloads/
+html_logs-v1.03/
+downloads-v1.03/
+
+# The user mentioned it's a private repo and fine to include certain things, 
+# but uncomment the lines below if you ever decide to make it public!
+.env
+# Important documents and util files/

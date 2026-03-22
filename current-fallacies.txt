@@ -1,0 +1,59 @@
+1. The SPA/Fragment Loop Prevention (Infinite Loop Risk)
+In modern web development, "Single Page Applications" (SPAs) use # fragments to navigate (e.g., site.com/page#section1, site.com/page#section2).
+
+The v1.03 Process: Your old triage loop explicitly checked for these fragments: if base_abs_href == base_current_url and '#' in abs_href: continue. It knew not to treat page sections as entirely new pages.
+
+The v2.0 Gap: The current get_links in navigator.py grabs everything. The StateManager will see url#A and url#B as unique URLs, meaning your agent will crawl the exact same page dozens of times, wasting all your API tokens and maxing out your step limit.
+
+2. User-Agent Rotation & Network Politeness
+To scrape a target like arxiv.org or archive.org successfully without getting immediately IP-banned, network spoofing is required.
+
+The v1.03 Process: You had a hardcoded list of USER_AGENTS and randomly selected one for the aiohttp.ClientSession. You also used an asyncio.Semaphore to cap concurrent downloads to 10 at a time to avoid overwhelming the target server.
+
+The v2.0 Gap: The main_experiment.py script opens an aiohttp session without any custom headers or randomized User-Agents. Your agent announces itself as a standard Python script, which many firewalls will block instantly.
+
+3. Exponential Backoff for Downloads
+Downloading files isn't as reliable as loading a webpage; servers drop connections constantly.
+
+The v1.03 Process: You built a robust retry loop for downloads (MAX_DOWNLOAD_RETRIES = 3) that used an exponential backoff strategy (delay = 2 ** attempt). If a download failed, the agent waited 2 seconds, then 4 seconds, then 8 seconds before giving up.
+
+The v2.0 Gap: File downloading is entirely missing (currently just a # Future: Insert download_files_concurrently(docs) here comment). When you implement it, you must bring this backoff logic over, or half your datasets will be corrupted by partial downloads.
+
+4. Hardcoded Domain Confinement
+AI agents are prone to "wandering." If an LLM sees a link to Twitter or a Wikipedia citation, it might decide to INVESTIGATE it, dragging your agent completely off the target website.
+
+The v1.03 Process: You had a strict, hardcoded rule right before the LLM even saw the page: if urlparse(current_url).netloc != self.base_domain: continue.
+
+The v2.0 Gap: The current main_experiment.py simply adds whatever URLs the LLM suggests to the sm.queue via the INVESTIGATE tool. There is no safety mechanism ensuring target_url belongs to the original seed domain.
+
+5. Multi-Tab Context Switching
+The v1.03 Process: You had an action called INVESTIGATE_AND_DOWNLOAD. When the agent clicked a link to investigate, it actively used self.driver.switch_to.window(self.driver.window_handles[-1]) to open a new tab, check for files, close the tab, and return to the main list.
+
+The v2.0 Gap: The new agent is strictly linear. If it investigates a sub-page, it has to rely entirely on the StateManager queue to eventually find its way back to the main list. This isn't necessarily a "bug," but it means the new agent will take much longer to traverse a deep, hierarchical directory than the old one did.
+
+Yes, there are a few more subtle but highly impactful differences that were left behind in the transition. These deal specifically with error recovery and API limits.
+
+Here are the final missing pieces from your v1.03 to v2.0 architecture:
+
+6. LLM Safety Filter Overrides (The "Refusal" Bug)
+When scraping the open web, you will inevitably encounter text that triggers AI safety filters (e.g., medical terms, cybersecurity discussions, or aggressive language).
+
+The v1.03 Process: You explicitly configured the ChatGoogleGenerativeAI model to ignore these blocks by setting thresholds like HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE.
+
+The v2.0 Gap: Your new llm_engine.py uses the standard google.generativeai setup without any safety overrides. If the agent reads a page that triggers a false positive, the API will throw a safety exception, potentially crashing your script or returning an empty response.
+
+7. DOM State Recovery (driver.back())
+If the AI makes a mistake and clicks a link that breaks the page or leads to a 404 error, the agent needs a way to physically undo that action in the browser.
+
+The v1.03 Process: If an action failed, or if it finished investigating a sub-page, the agent actively repaired its state using self.driver.back() to return to the previous page before making its next decision.
+
+The v2.0 Gap: In main_experiment.py, if a CLICK or INVESTIGATE action fails, the script just logs a warning and moves to the next URL in the queue. It doesn't tell the Selenium driver to go "back," meaning the physical browser might be stuck on a broken page while the StateManager thinks it is somewhere else.
+
+8. Dedicated Download Auditing
+For a research paper, you need to prove exactly what was downloaded, where it came from, and if it failed.
+
+The v1.03 Process: You maintained two separate CSV files: run_log-v1.03.csv for agent decisions and a dedicated download_log-v1.03.csv that tracked timestamp, file_url, source_url, status.
+
+The v2.0 Gap: The StateManager only has one general run_log.csv. While this tracks navigation, you are missing the specific auditing trail required to calculate the "Harvest Ratio" (files successfully downloaded vs. pages visited) for your results section.
+
+With these additional points (along with the 5 previous ones), you have a complete diagnostic list. You can pass this comprehensive breakdown to your coding agent to ensure the v2.0 architecture retains the robustness of the prototype while keeping the new, cleaner code structure.
