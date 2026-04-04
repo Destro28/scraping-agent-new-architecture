@@ -120,6 +120,25 @@ async def main():
             if docs:
                 logging.info(f"Triage found {len(docs)} documents on this page.")
                 await download_files_concurrently(docs, url, "./downloads", sm)
+                
+            # --- Secondary Check for Potential Endpoints ---
+            from downloader import verify_pdf_endpoint
+            potential_endpoints = [
+                l for l in all_links 
+                if not any(l.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]) 
+                and any(kw in l.lower() for kw in ['/pdf/', '/download/', '/fetch/'])
+            ]
+            
+            sniffed_docs = []
+            for ep in potential_endpoints:
+                if verify_pdf_endpoint(ep):
+                    sniffed_docs.append(ep)
+                    
+            if sniffed_docs:
+                logging.info(f"MIME Sniffing found {len(sniffed_docs)} PDF endpoints.")
+                await download_files_concurrently(
+                    sniffed_docs, url, "./downloads", sm, force_extension=".pdf", discovery_type="mime_sniff"
+                )
             
             # Step B: Decision (History-Aware)
             domain_hint = next((hint for domain, hint in SITE_HINTS.items() if domain in url), SITE_HINTS["default"])

@@ -71,14 +71,18 @@ class StateManager:
             logging.error(f"Corrupt state file found ({e}). Starting fresh.")
             return False
 
-    def log_action(self, url, action_type, status):
+    def log_action(self, url, action_type, status, discovery_type=None):
         """Appends action to CSV log (non-blocking Append-Only)."""
         file_exists = os.path.exists(self.run_log_file)
         with open(self.run_log_file, 'a', encoding='utf-8') as f:
             if not file_exists:
-                f.write("timestamp,url,action,status\n")
+                f.write("timestamp,url,action,status,discovery_type\n")
+            
             # Simple timestamp could be added here
-            f.write(f"{url},{action_type},{status}\n")
+            log_line = f"{url},{action_type},{status}"
+            if discovery_type:
+                log_line += f",{discovery_type}"
+            f.write(log_line + "\n")
 
     def log_download(self, file_url, source_url, status):
         """Appends a download attempt to a dedicated CSV log."""

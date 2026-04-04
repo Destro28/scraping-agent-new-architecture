@@ -10,6 +10,7 @@ state/
 downloads/
 html_logs-v1.03/
 downloads-v1.03/
+site_hints.txt
 
 # The user mentioned it's a private repo and fine to include certain things, 
 # but uncomment the lines below if you ever decide to make it public!
