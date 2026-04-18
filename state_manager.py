@@ -10,6 +10,7 @@ class StateManager:
         self.state_file = os.path.join(base_path, "agent_state.json")
         self.run_log_file = os.path.join(base_path, "run_log.csv")
         self.download_log_file = os.path.join(base_path, "download_log.csv")
+        self.metrics_history_file = os.path.join(base_path, "metrics_history.csv")
         
         # Ensure state directory exists
         os.makedirs(base_path, exist_ok=True)
@@ -18,7 +19,13 @@ class StateManager:
         self.queue = deque()
         self.visited = set()
         self.html_map = {}  # URL -> Local File Path
-        self.metrics = {"pages_crawled": 0, "files_downloaded": 0, "tokens_used": 0}
+        self.metrics = {
+            "pages_crawled": 0, 
+            "files_downloaded": 0, 
+            "total_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+        }
 
     def save_state(self):
         """
@@ -91,3 +98,14 @@ class StateManager:
             if not file_exists:
                 f.write("timestamp,file_url,source_url,status\n")
             f.write(f"{file_url},{source_url},{status}\n")
+
+    def log_metrics_snapshot(self):
+        """Saves a snapshot of current metrics for historical analysis (e.g. plotting)."""
+        file_exists = os.path.exists(self.metrics_history_file)
+        with open(self.metrics_history_file, 'a', encoding='utf-8') as f:
+            headers = ["pages_crawled", "files_downloaded", "total_tokens", "prompt_tokens", "completion_tokens"]
+            if not file_exists:
+                f.write(",".join(headers) + "\n")
+            
+            row = [str(self.metrics.get(h, 0)) for h in headers]
+            f.write(",".join(row) + "\n")

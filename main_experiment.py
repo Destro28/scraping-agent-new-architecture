@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import aiohttp
+import time
 from urllib.parse import urlparse, urljoin
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
@@ -23,6 +24,7 @@ logging.basicConfig(
 # Configuration for specific domains [Tailored Prompting]
 SITE_HINTS = {
     "rfc-editor.org": "Focus on finding the 'PDF' version of the RFC. Ignore 'Plain Text' if PDF is available.",
+    "arxiv.org": "Focus on finding the 'PDF' download link in the right-hand sidebar of abstract pages.",
     "default": "Find direct download links for PDF, DOCX, or XLSX files."
     # "default": "Focus on navigating to other sub-domains of the site provided and try and investigate if there are any documents available."
 }
@@ -84,7 +86,7 @@ async def main():
     action_history = deque(maxlen=5) 
 
     # 3. State Loading Logic
-    seed_url = "https://arxiv.org/archive/gr-qc"
+    seed_url = "https://dspace.mit.edu"
     base_domain = urlparse(seed_url).netloc
     
     if args.resume and sm.load_state():
@@ -112,6 +114,7 @@ async def main():
                 continue 
                 
             sm.html_map[url] = file_path
+            start_time = time.time()
             
             # --- ALWAYS-ON TRIAGE ---
             logging.info("Running Always-On File Triage...")
@@ -144,13 +147,19 @@ async def main():
             domain_hint = next((hint for domain, hint in SITE_HINTS.items() if domain in url), SITE_HINTS["default"])
             
             # We pass the memory (action_history) to the LLM so it knows where it has been
-            action = await llm.decide_action(html, url, list(action_history), site_hint=domain_hint)
+            action, usage = await llm.decide_action(html, url, list(action_history), site_hint=domain_hint)
+            
+            # Record tokens
+            sm.metrics["total_tokens"] += usage.get("total_tokens", 0)
+            sm.metrics["prompt_tokens"] += usage.get("prompt_tokens", 0)
+            sm.metrics["completion_tokens"] += usage.get("completion_tokens", 0)
             
             investigate_selectors = action.get("specific_subpages", [])
             next_page_selector = action.get("next_page")
             reason = action.get("reason", "No reason provided")
             
-            logging.info(f"AI Decision: Navigation Plan | Reason: {reason}")
+            elapsed = time.time() - start_time
+            logging.info(f"AI Decision: Navigation Plan | Reason: {reason} | Time: {elapsed:.2f}s")
             
             # Update history for the NEXT loop iteration
             num_inv = len(investigate_selectors)
@@ -211,6 +220,7 @@ async def main():
                 # Save state every 5 pages to prevent data loss on crash
                 if sm.metrics["pages_crawled"] % 5 == 0:
                     sm.save_state()
+                    sm.log_metrics_snapshot()
 
     # Final Save and Cleanup
     sm.save_state()
