@@ -15,10 +15,14 @@ from navigator import Navigator
 from llm_engine import LLMEngine
 from downloader import download_files_concurrently
 # --- 1. ENABLE LOGGING (This fixes the silent failure) ---
+os.makedirs("./state", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()] # Print to terminal
+    handlers=[
+        logging.StreamHandler(), # Print to terminal
+        logging.FileHandler("./state/execution_trace.log", encoding="utf-8") # Save exact execution
+    ]
 )
 
 # Configuration for specific domains [Tailored Prompting]
@@ -47,8 +51,14 @@ async def offline_html_parser_and_downloader(sm, start_url):
             
             for a_tag in soup.find_all('a', href=True):
                 href = a_tag.get('href')
-                if href and any(href.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
-                    full_url = urljoin(source_url, href)
+                if not href:
+                    continue
+                
+                full_url = urljoin(source_url, href)
+                path = urlparse(full_url).path.lower()
+                
+                if any(path.endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
+
                     
                     # Check if already exists 
                     local_name = re.sub(r'[\\/*?:"<>|]', "_", urlparse(full_url).path.split('/')[-1])
@@ -119,7 +129,7 @@ async def main():
             # --- ALWAYS-ON TRIAGE ---
             logging.info("Running Always-On File Triage...")
             all_links = nav.get_links(url)
-            docs = [l for l in all_links if any(l.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"])]
+            docs = [l for l in all_links if any(urlparse(l).path.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"])]
             if docs:
                 logging.info(f"Triage found {len(docs)} documents on this page.")
                 await download_files_concurrently(docs, url, "./downloads", sm)
@@ -128,8 +138,8 @@ async def main():
             from downloader import verify_pdf_endpoint
             potential_endpoints = [
                 l for l in all_links 
-                if not any(l.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]) 
-                and any(kw in l.lower() for kw in ['/pdf/', '/download/', '/fetch/'])
+                if not any(urlparse(l).path.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]) 
+                and any(kw in l.lower() for kw in ['/pdf/', '/download/', '/fetch/', '/bitstream/', '/item/'])
             ]
             
             sniffed_docs = []
@@ -177,7 +187,7 @@ async def main():
                 target_url = urljoin(url, link_str.strip())
                 
                 # Edge case check: DO NOT add known files to the navigation queue!
-                if any(target_url.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
+                if any(urlparse(target_url).path.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
                     logging.warning(f"Blocked document URL from navigation queue: {target_url}")
                     return False
                     
@@ -193,14 +203,14 @@ async def main():
                         logging.warning(f"Domain Confinement: Blocked external link {target_url}")
                 return False
 
-            # Process Specific Subpages
-            for link in investigate_selectors:
-                if process_link(link, priority=False):
-                    success = True
-
-            # Process Next Page
+            # Process Next Page FIRST (so it goes deeper into the left side of the queue)
             if next_page_selector:
                 if process_link(next_page_selector, priority=True):
+                    success = True
+
+            # Process Specific Subpages SECOND (in reverse, so the first subpage is at the very front of the queue)
+            for link in reversed(investigate_selectors):
+                if process_link(link, priority=True):
                     success = True
 
             logging.info(f"Added {new_urls_found} new target pages to queue.")

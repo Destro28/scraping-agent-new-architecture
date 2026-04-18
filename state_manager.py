@@ -3,6 +3,7 @@ import os
 import shutil
 from collections import deque
 import logging
+import datetime
 
 class StateManager:
     def __init__(self, base_path="./state"):
@@ -85,8 +86,8 @@ class StateManager:
             if not file_exists:
                 f.write("timestamp,url,action,status,discovery_type\n")
             
-            # Simple timestamp could be added here
-            log_line = f"{url},{action_type},{status}"
+            timestamp = datetime.datetime.now().isoformat()
+            log_line = f"{timestamp},{url},{action_type},{status}"
             if discovery_type:
                 log_line += f",{discovery_type}"
             f.write(log_line + "\n")
@@ -97,7 +98,8 @@ class StateManager:
         with open(self.download_log_file, 'a', encoding='utf-8') as f:
             if not file_exists:
                 f.write("timestamp,file_url,source_url,status\n")
-            f.write(f"{file_url},{source_url},{status}\n")
+            timestamp = datetime.datetime.now().isoformat()
+            f.write(f"{timestamp},{file_url},{source_url},{status}\n")
 
     def log_metrics_snapshot(self):
         """Saves a snapshot of current metrics for historical analysis (e.g. plotting)."""
