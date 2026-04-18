@@ -46,7 +46,7 @@ class LLMEngine:
         # Return a compact version of the text and links
         return soup.get_text(separator=' ', strip=True)[:35000]
 
-    async def decide_action(self, html, url, history, site_hint=""):
+    async def decide_action(self, html, url, history, site_hint={"mit.edu": "You are navigating a research repository. Prioritize links containing '/handle/' as these lead to community and collection hierarchies. When on an individual item page, focus on finding 'View/Open' links for the primary PDF bitstream. Ignore administrative sidebar links like 'Login', 'Register', or 'Statistics'."}):  
         """
         Determines next step. 
         site_hint: Optional custom instructions for specific domains.
@@ -62,6 +62,7 @@ class LLMEngine:
         prompt = f"""
         Current URL: {url}
         Action History (last 5): {history[-5:]}
+        SITE-SPECIFIC INSTRUCTIONS: {site_hint}
         
         SOP: You are the Navigation Engine. Your ONLY job is to find the best links to explore to find documents.
         (Note: All document files like PDFs are already downloaded automatically by a background script. DO NOT select direct document links. DO NOT try to 'download' anything).
@@ -85,14 +86,21 @@ class LLMEngine:
             response = await asyncio.to_thread(self.model.generate_content, prompt)
             raw_text = response.text
             
+            # Extract usage metadata if available
+            usage = {
+                "prompt_tokens": getattr(response.usage_metadata, 'prompt_token_count', 0),
+                "completion_tokens": getattr(response.usage_metadata, 'candidates_token_count', 0),
+                "total_tokens": getattr(response.usage_metadata, 'total_token_count', 0)
+            }
+            
             # Use Regex to extract only the JSON block [Fixes KeyError]
             json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
             if json_match:
-                return json.loads(json_match.group(0))
+                return json.loads(json_match.group(0)), usage
             
             logging.error(f"No JSON found in LLM response for {url}")
-            return {"tool": "FINISH", "reason": "Malformed LLM response"}
+            return {"specific_subpages": [], "next_page": None, "reason": "Malformed LLM response"}, usage
             
         except Exception as e:
             logging.error(f"LLM Decision failed: {e}")
-            return {"tool": "FINISH", "reason": "LLM Error"}
+            return {"specific_subpages": [], "next_page": None, "reason": "LLM Error"}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}

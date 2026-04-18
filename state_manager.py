@@ -3,6 +3,7 @@ import os
 import shutil
 from collections import deque
 import logging
+import datetime
 
 class StateManager:
     def __init__(self, base_path="./state"):
@@ -10,6 +11,7 @@ class StateManager:
         self.state_file = os.path.join(base_path, "agent_state.json")
         self.run_log_file = os.path.join(base_path, "run_log.csv")
         self.download_log_file = os.path.join(base_path, "download_log.csv")
+        self.metrics_history_file = os.path.join(base_path, "metrics_history.csv")
         
         # Ensure state directory exists
         os.makedirs(base_path, exist_ok=True)
@@ -18,7 +20,13 @@ class StateManager:
         self.queue = deque()
         self.visited = set()
         self.html_map = {}  # URL -> Local File Path
-        self.metrics = {"pages_crawled": 0, "files_downloaded": 0, "tokens_used": 0}
+        self.metrics = {
+            "pages_crawled": 0, 
+            "files_downloaded": 0, 
+            "total_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0
+        }
 
     def save_state(self):
         """
@@ -71,14 +79,18 @@ class StateManager:
             logging.error(f"Corrupt state file found ({e}). Starting fresh.")
             return False
 
-    def log_action(self, url, action_type, status):
+    def log_action(self, url, action_type, status, discovery_type=None):
         """Appends action to CSV log (non-blocking Append-Only)."""
         file_exists = os.path.exists(self.run_log_file)
         with open(self.run_log_file, 'a', encoding='utf-8') as f:
             if not file_exists:
-                f.write("timestamp,url,action,status\n")
-            # Simple timestamp could be added here
-            f.write(f"{url},{action_type},{status}\n")
+                f.write("timestamp,url,action,status,discovery_type\n")
+            
+            timestamp = datetime.datetime.now().isoformat()
+            log_line = f"{timestamp},{url},{action_type},{status}"
+            if discovery_type:
+                log_line += f",{discovery_type}"
+            f.write(log_line + "\n")
 
     def log_download(self, file_url, source_url, status):
         """Appends a download attempt to a dedicated CSV log."""
@@ -86,4 +98,16 @@ class StateManager:
         with open(self.download_log_file, 'a', encoding='utf-8') as f:
             if not file_exists:
                 f.write("timestamp,file_url,source_url,status\n")
-            f.write(f"{file_url},{source_url},{status}\n")
+            timestamp = datetime.datetime.now().isoformat()
+            f.write(f"{timestamp},{file_url},{source_url},{status}\n")
+
+    def log_metrics_snapshot(self):
+        """Saves a snapshot of current metrics for historical analysis (e.g. plotting)."""
+        file_exists = os.path.exists(self.metrics_history_file)
+        with open(self.metrics_history_file, 'a', encoding='utf-8') as f:
+            headers = ["pages_crawled", "files_downloaded", "total_tokens", "prompt_tokens", "completion_tokens"]
+            if not file_exists:
+                f.write(",".join(headers) + "\n")
+            
+            row = [str(self.metrics.get(h, 0)) for h in headers]
+            f.write(",".join(row) + "\n")

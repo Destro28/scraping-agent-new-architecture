@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import aiohttp
+import time
 from urllib.parse import urlparse, urljoin
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
@@ -14,15 +15,20 @@ from navigator import Navigator
 from llm_engine import LLMEngine
 from downloader import download_files_concurrently
 # --- 1. ENABLE LOGGING (This fixes the silent failure) ---
+os.makedirs("./state", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()] # Print to terminal
+    handlers=[
+        logging.StreamHandler(), # Print to terminal
+        logging.FileHandler("./state/execution_trace.log", encoding="utf-8") # Save exact execution
+    ]
 )
 
 # Configuration for specific domains [Tailored Prompting]
 SITE_HINTS = {
     "rfc-editor.org": "Focus on finding the 'PDF' version of the RFC. Ignore 'Plain Text' if PDF is available.",
+    "arxiv.org": "Focus on finding the 'PDF' download link in the right-hand sidebar of abstract pages.",
     "default": "Find direct download links for PDF, DOCX, or XLSX files."
     # "default": "Focus on navigating to other sub-domains of the site provided and try and investigate if there are any documents available."
 }
@@ -45,8 +51,14 @@ async def offline_html_parser_and_downloader(sm, start_url):
             
             for a_tag in soup.find_all('a', href=True):
                 href = a_tag.get('href')
-                if href and any(href.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
-                    full_url = urljoin(source_url, href)
+                if not href:
+                    continue
+                
+                full_url = urljoin(source_url, href)
+                path = urlparse(full_url).path.lower()
+                
+                if any(path.endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
+
                     
                     # Check if already exists 
                     local_name = re.sub(r'[\\/*?:"<>|]', "_", urlparse(full_url).path.split('/')[-1])
@@ -84,7 +96,7 @@ async def main():
     action_history = deque(maxlen=5) 
 
     # 3. State Loading Logic
-    seed_url = "https://arxiv.org/archive/gr-qc"
+    seed_url = "https://dspace.mit.edu"
     base_domain = urlparse(seed_url).netloc
     
     if args.resume and sm.load_state():
@@ -112,26 +124,52 @@ async def main():
                 continue 
                 
             sm.html_map[url] = file_path
+            start_time = time.time()
             
             # --- ALWAYS-ON TRIAGE ---
             logging.info("Running Always-On File Triage...")
             all_links = nav.get_links(url)
-            docs = [l for l in all_links if any(l.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"])]
+            docs = [l for l in all_links if any(urlparse(l).path.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"])]
             if docs:
                 logging.info(f"Triage found {len(docs)} documents on this page.")
                 await download_files_concurrently(docs, url, "./downloads", sm)
+                
+            # --- Secondary Check for Potential Endpoints ---
+            from downloader import verify_pdf_endpoint
+            potential_endpoints = [
+                l for l in all_links 
+                if not any(urlparse(l).path.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]) 
+                and any(kw in l.lower() for kw in ['/pdf/', '/download/', '/fetch/', '/bitstream/', '/item/'])
+            ]
+            
+            sniffed_docs = []
+            for ep in potential_endpoints:
+                if verify_pdf_endpoint(ep):
+                    sniffed_docs.append(ep)
+                    
+            if sniffed_docs:
+                logging.info(f"MIME Sniffing found {len(sniffed_docs)} PDF endpoints.")
+                await download_files_concurrently(
+                    sniffed_docs, url, "./downloads", sm, force_extension=".pdf", discovery_type="mime_sniff"
+                )
             
             # Step B: Decision (History-Aware)
             domain_hint = next((hint for domain, hint in SITE_HINTS.items() if domain in url), SITE_HINTS["default"])
             
             # We pass the memory (action_history) to the LLM so it knows where it has been
-            action = await llm.decide_action(html, url, list(action_history), site_hint=domain_hint)
+            action, usage = await llm.decide_action(html, url, list(action_history), site_hint=domain_hint)
+            
+            # Record tokens
+            sm.metrics["total_tokens"] += usage.get("total_tokens", 0)
+            sm.metrics["prompt_tokens"] += usage.get("prompt_tokens", 0)
+            sm.metrics["completion_tokens"] += usage.get("completion_tokens", 0)
             
             investigate_selectors = action.get("specific_subpages", [])
             next_page_selector = action.get("next_page")
             reason = action.get("reason", "No reason provided")
             
-            logging.info(f"AI Decision: Navigation Plan | Reason: {reason}")
+            elapsed = time.time() - start_time
+            logging.info(f"AI Decision: Navigation Plan | Reason: {reason} | Time: {elapsed:.2f}s")
             
             # Update history for the NEXT loop iteration
             num_inv = len(investigate_selectors)
@@ -149,7 +187,7 @@ async def main():
                 target_url = urljoin(url, link_str.strip())
                 
                 # Edge case check: DO NOT add known files to the navigation queue!
-                if any(target_url.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
+                if any(urlparse(target_url).path.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
                     logging.warning(f"Blocked document URL from navigation queue: {target_url}")
                     return False
                     
@@ -165,14 +203,14 @@ async def main():
                         logging.warning(f"Domain Confinement: Blocked external link {target_url}")
                 return False
 
-            # Process Specific Subpages
-            for link in investigate_selectors:
-                if process_link(link, priority=False):
-                    success = True
-
-            # Process Next Page
+            # Process Next Page FIRST (so it goes deeper into the left side of the queue)
             if next_page_selector:
                 if process_link(next_page_selector, priority=True):
+                    success = True
+
+            # Process Specific Subpages SECOND (in reverse, so the first subpage is at the very front of the queue)
+            for link in reversed(investigate_selectors):
+                if process_link(link, priority=True):
                     success = True
 
             logging.info(f"Added {new_urls_found} new target pages to queue.")
@@ -192,6 +230,7 @@ async def main():
                 # Save state every 5 pages to prevent data loss on crash
                 if sm.metrics["pages_crawled"] % 5 == 0:
                     sm.save_state()
+                    sm.log_metrics_snapshot()
 
     # Final Save and Cleanup
     sm.save_state()
