@@ -6,12 +6,12 @@ import logging
 import datetime
 
 class StateManager:
-    def __init__(self, base_path="./state"):
+    def __init__(self, base_path="./state", domain="default"):
         self.base_path = base_path
-        self.state_file = os.path.join(base_path, "agent_state.json")
-        self.run_log_file = os.path.join(base_path, "run_log.csv")
-        self.download_log_file = os.path.join(base_path, "download_log.csv")
-        self.metrics_history_file = os.path.join(base_path, "metrics_history.csv")
+        self.state_file = os.path.join(base_path, f"agent_state_{domain}.json")
+        self.run_log_file = os.path.join(base_path, f"run_log_{domain}.csv")
+        self.download_log_file = os.path.join(base_path, f"download_log_{domain}.csv")
+        self.metrics_history_file = os.path.join(base_path, f"metrics_history_{domain}.csv")
         
         # Ensure state directory exists
         os.makedirs(base_path, exist_ok=True)
@@ -71,7 +71,13 @@ class StateManager:
             self.queue = deque(data.get("queue", []))
             self.visited = set(data.get("visited", []))
             self.html_map = data.get("html_map", {})
-            self.metrics = data.get("metrics", {"pages_crawled": 0, "files_downloaded": 0, "tokens_used": 0})
+            self.metrics = data.get("metrics", {
+                "pages_crawled": 0, 
+                "files_downloaded": 0, 
+                "total_tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0
+            })
             
             logging.info(f"Resumed state: {len(self.visited)} pages visited, {len(self.queue)} in queue.")
             return True

@@ -33,8 +33,10 @@ SITE_HINTS = {
     # "default": "Focus on navigating to other sub-domains of the site provided and try and investigate if there are any documents available."
 }
 
+
 async def offline_html_parser_and_downloader(sm, start_url):
-    """Parses all saved HTML files to find and download any missed file links."""
+    """Creates a soup object for the page, finds all the link tags, and checks if any of them point to a file that we want to download. If it finds any, it adds them to a set of links to download. Finally, it calls the download_files_concurrently function to download all the found links."""
+    
     logging.info("--- Starting Offline HTML Parser Safety Net ---")
     
     all_found_links = set()
@@ -96,7 +98,7 @@ async def main():
     action_history = deque(maxlen=5) 
 
     # 3. State Loading Logic
-    seed_url = "https://dspace.mit.edu"
+    seed_url = "https://arxiv.org/archive/gr-qc"
     base_domain = urlparse(seed_url).netloc
     
     if args.resume and sm.load_state():
@@ -113,6 +115,14 @@ async def main():
             url = sm.queue.popleft()
             
             if url in sm.visited:
+                continue
+                
+            path_lower = urlparse(url).path.lower()
+            is_known_ext = any(path_lower.endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"])
+            is_hidden_pdf = any(kw in path_lower for kw in ['/pdf/', '/download/', '/fetch/', '/bitstream/'])
+            
+            if is_known_ext or is_hidden_pdf:
+                logging.warning(f"Skipping binary/document URL from queue: {url}")
                 continue
             
             logging.info(f"--- Processing: {url} ---")
@@ -186,8 +196,12 @@ async def main():
                 
                 target_url = urljoin(url, link_str.strip())
                 
-                # Edge case check: DO NOT add known files to the navigation queue!
-                if any(urlparse(target_url).path.lower().endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"]):
+                # Edge case check: DO NOT add known files or binary endpoints to the navigation queue!
+                path_lower = urlparse(target_url).path.lower()
+                is_known_ext = any(path_lower.endswith(ext) for ext in [".pdf", ".docx", ".xlsx", ".csv"])
+                is_hidden_pdf = any(kw in path_lower for kw in ['/pdf/', '/download/', '/fetch/', '/bitstream/'])
+                
+                if is_known_ext or is_hidden_pdf:
                     logging.warning(f"Blocked document URL from navigation queue: {target_url}")
                     return False
                     
@@ -239,7 +253,15 @@ async def main():
     # Offline parser sequence
     await offline_html_parser_and_downloader(sm, seed_url)
     
+    # Final state save to ensureSafety Net results are captured in metrics
+    sm.save_state()
+    sm.log_metrics_snapshot()
+    
     logging.info("Crawl session complete.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("--- USER INTERRUPT DETECTED ---")
+        logging.info("Session stopped manually by researcher. State preserved.")
